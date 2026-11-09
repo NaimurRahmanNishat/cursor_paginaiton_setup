@@ -38,6 +38,111 @@ const handlePageChange = (targetPage: number) => {
 };
 ```
 
+
+## frontend rtk query
+```
+// src/features/api/ecommerceApi.ts
+import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+
+export const ecommerceApi = createApi({
+  reducerPath: 'ecommerceApi',
+  baseQuery: fetchBaseQuery({ baseUrl: '/api' }),
+  tagTypes: ['Product', 'Review', 'Order'],
+  endpoints: (builder) => ({
+
+    // ১. গেট অল প্রোডাক্টস (Infinite Scroll)
+    getAllProductsInfinite: builder.query({
+      query: ({ limit = 10, cursor, category, search, sortBy, sortOrder }) => {
+        const params = new URLSearchParams();
+        if (limit) params.append('limit', limit.toString());
+        if (cursor) params.append('cursor', cursor);
+        if (category) params.append('category', category);
+        if (search) params.append('search', search);
+        if (sortBy) params.append('sortBy', sortBy);
+        if (sortOrder) params.append('sortOrder', sortOrder);
+
+        return `/products?${params.toString()}`;
+      },
+      serializeQueryArgs: ({ endpointName, queryArgs }) => {
+        const { cursor: _cursor, ...rest } = queryArgs;
+        return `${endpointName}-${JSON.stringify(rest)}`;
+      },
+      merge: (currentCache: any, newData: any, { arg }) => {
+        if (!arg.cursor) return newData;
+        currentCache.data.push(...newData.data);
+        currentCache.meta = newData.meta;
+      },
+      forceRefetch({ currentArg, previousArg }) {
+        return currentArg?.cursor !== previousArg?.cursor;
+      },
+    }),
+
+    // ২. গেট অল রিভিউস (Infinite Scroll)
+    getAllReviewsInfinite: builder.query({
+      query: ({ limit = 10, cursor, productId, rating, search, sortBy, sortOrder }) => {
+        const params = new URLSearchParams();
+        if (limit) params.append('limit', limit.toString());
+        if (cursor) params.append('cursor', cursor);
+        if (productId) params.append('productId', productId);
+        if (rating) params.append('rating', rating.toString());
+        if (search) params.append('search', search);
+        if (sortBy) params.append('sortBy', sortBy);
+        if (sortOrder) params.append('sortOrder', sortOrder);
+
+        return `/reviews?${params.toString()}`;
+      },
+      serializeQueryArgs: ({ endpointName, queryArgs }) => {
+        const { cursor: _cursor, ...rest } = queryArgs;
+        return `${endpointName}-${JSON.stringify(rest)}`;
+      },
+      merge: (currentCache: any, newData: any, { arg }) => {
+        if (!arg.cursor) return newData;
+        currentCache.data.push(...newData.data);
+        currentCache.meta = newData.meta;
+      },
+      forceRefetch({ currentArg, previousArg }) {
+        return currentArg?.cursor !== previousArg?.cursor;
+      },
+    }),
+
+    // ৩. গেট অল অর্ডারস (Infinite Scroll - Admin/Customer Order History)
+    getAllOrdersInfinite: builder.query({
+      query: ({ limit = 10, cursor, status, userId, search, sortBy, sortOrder }) => {
+        const params = new URLSearchParams();
+        if (limit) params.append('limit', limit.toString());
+        if (cursor) params.append('cursor', cursor);
+        if (status) params.append('status', status); // যেমন: pending, processing, delivered, cancelled
+        if (userId) params.append('userId', userId);
+        if (search) params.append('search', search);
+        if (sortBy) params.append('sortBy', sortBy);
+        if (sortOrder) params.append('sortOrder', sortOrder);
+
+        return `/orders?${params.toString()}`;
+      },
+      serializeQueryArgs: ({ endpointName, queryArgs }) => {
+        const { cursor: _cursor, ...rest } = queryArgs;
+        return `${endpointName}-${JSON.stringify(rest)}`;
+      },
+      merge: (currentCache: any, newData: any, { arg }) => {
+        if (!arg.cursor) return newData;
+        currentCache.data.push(...newData.data);
+        currentCache.meta = newData.meta;
+      },
+      forceRefetch({ currentArg, previousArg }) {
+        return currentArg?.cursor !== previousArg?.cursor;
+      },
+    }),
+
+  }),
+});
+
+export const {
+  useGetAllProductsInfiniteQuery,
+  useGetAllReviewsInfiniteQuery,
+  useGetAllOrdersInfiniteQuery,
+} = ecommerceApi;
+```
+
 ## backend code
 
 ```
