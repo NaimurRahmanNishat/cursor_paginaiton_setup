@@ -256,3 +256,191 @@ export const createCursorPaginationMeta = <T extends Record<string, any>>(
 };
 
 ```
+
+
+
+## Nextjs cursor patination
+```
+// src/helper/cursorPagination.ts
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { Types } from 'mongoose';
+
+export type SortOrder = 'asc' | 'desc';
+
+export interface ICursorPaginationOptions {
+  limit?: number | string | null;
+  cursor?: string | null;
+  sortBy?: string;
+  sortOrder?: SortOrder;
+  maxLimit?: number;
+}
+
+export interface ICursorPaginationResult {
+  limit: number;
+  fetchLimit: number;
+  sortBy: string;
+  sortOrder: SortOrder;
+  sort: Record<string, 1 | -1>;
+  filter: Record<string, unknown>;
+}
+
+export interface ICursorPaginationMeta {
+  limit: number;
+  hasMore: boolean;
+  nextCursor: string | null;
+  sortBy: string;
+  sortOrder: SortOrder;
+}
+
+export class InvalidCursorError extends Error {
+  constructor() {
+    super('Invalid cursor');
+    this.name = 'InvalidCursorError';
+  }
+}
+
+/* ====================== CURSOR ENCODE / DECODE ====================== */
+interface CursorPayload {
+  v: string | number | boolean | null;
+  d: boolean;    
+  id: string;    
+  s: string;      
+  o: SortOrder;   
+}
+
+const OBJECT_ID_REGEX = /^[a-f\d]{24}$/i;
+
+const encodeCursor = (payload: CursorPayload): string =>
+  Buffer.from(JSON.stringify(payload)).toString('base64url');
+
+const decodeCursor = (cursor: string): CursorPayload => {
+  let parsed: any;
+  try {
+    parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+  } catch {
+    throw new InvalidCursorError();
+  }
+
+  const validValue = parsed?.v === null || ['string', 'number', 'boolean'].includes(typeof parsed?.v);
+
+  if (
+    !parsed ||
+    typeof parsed.id !== 'string' ||
+    !OBJECT_ID_REGEX.test(parsed.id) ||
+    typeof parsed.d !== 'boolean' ||
+    typeof parsed.s !== 'string' ||
+    (parsed.o !== 'asc' && parsed.o !== 'desc') ||
+    !validValue
+  ) {
+    throw new InvalidCursorError();
+  }
+  return parsed as CursorPayload;
+};
+
+
+/* ====================== CURSOR PAGINATION ====================== */
+export const calculateCursorPagination = (
+  options: ICursorPaginationOptions,
+): ICursorPaginationResult => {
+  const maxLimit = options.maxLimit ?? 50;
+  const rawLimit = Number(options.limit);
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.floor(rawLimit), maxLimit) : 10;
+
+  const sortBy = options.sortBy || 'createdAt';
+  const sortOrder: SortOrder = options.sortOrder || 'desc';
+  const dir = sortOrder === 'asc' ? 1 : -1;
+  const op = sortOrder === 'asc' ? '$gt' : '$lt';
+
+  const sort: Record<string, 1 | -1> =
+    sortBy === '_id' ? { _id: dir } : { [sortBy]: dir, _id: dir };
+
+  let filter: Record<string, unknown> = {};
+
+  if (options.cursor) {
+    const c = decodeCursor(options.cursor);
+    if (c.s !== sortBy || c.o !== sortOrder) throw new InvalidCursorError();
+    const value = c.d ? new Date(c.v as string) : c.v;
+    if (c.d && Number.isNaN((value as Date).getTime())) throw new InvalidCursorError();
+    const id = new Types.ObjectId(c.id); 
+    filter =
+      sortBy === '_id'
+        ? { _id: { [op]: id } }
+        : {
+            $or: [
+              { [sortBy]: { [op]: value } },
+              { [sortBy]: value, _id: { [op]: id } },
+            ],
+          };
+  }
+  return { limit, fetchLimit: limit + 1, sortBy, sortOrder, sort, filter };
+};
+
+
+/* ====================== CREATE CURSOR PAGINATION META ====================== */
+export const createCursorPaginationMeta = <T extends Record<string, any>>(
+  data: T[],
+  limit: number,
+  sortBy: string = 'createdAt',
+  sortOrder: SortOrder = 'desc',
+): { data: T[]; meta: ICursorPaginationMeta } => {
+  const hasMore = data.length > limit;
+  const paginatedData = hasMore ? data.slice(0, limit) : data;
+
+  let nextCursor: string | null = null;
+  if (hasMore) {
+    const last = paginatedData[paginatedData.length - 1];
+    const raw = sortBy === '_id' ? last._id : last[sortBy];
+
+    if (raw === undefined || raw === null) {
+      throw new Error(`Cursor sort field "${sortBy}" is null/undefined on a document`);
+    }
+
+    const isDate = raw instanceof Date;
+    nextCursor = encodeCursor({
+      v: isDate
+        ? raw.toISOString()
+        : typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean'
+          ? raw
+          : String(raw),
+      d: isDate,
+      id: String(last._id),
+      s: sortBy,
+      o: sortOrder,
+    });
+  }
+  return {
+    data: paginatedData,
+    meta: { limit, hasMore, nextCursor, sortBy, sortOrder },
+  };
+};
+
+/* ====================== HELPERS ====================== */
+export const combineFilters = (
+  ...filters: Array<Record<string, unknown> | undefined>
+): Record<string, unknown> => {
+  const valid = filters.filter(
+    (f): f is Record<string, unknown> => !!f && Object.keys(f).length > 0,
+  );
+  if (valid.length === 0) return {};
+  if (valid.length === 1) return valid[0];
+  return { $and: valid };
+};
+
+
+export const getCursorParams = (
+  searchParams: URLSearchParams,
+  config: { allowedSortBy?: string[]; defaultSortBy?: string; defaultSortOrder?: SortOrder } = {},
+): ICursorPaginationOptions => {
+  const { allowedSortBy = ['createdAt'], defaultSortBy = 'createdAt', defaultSortOrder = 'desc' } = config;
+  const sortByParam = searchParams.get('sortBy');
+  const sortOrderParam = searchParams.get('sortOrder');
+
+  return {
+    limit: searchParams.get('limit'),
+    cursor: searchParams.get('cursor'),
+    sortBy: sortByParam && allowedSortBy.includes(sortByParam) ? sortByParam : defaultSortBy,
+    sortOrder: sortOrderParam === 'asc' || sortOrderParam === 'desc' ? sortOrderParam : defaultSortOrder,
+  };
+};
+
+```
